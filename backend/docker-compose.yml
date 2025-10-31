@@ -1,0 +1,30 @@
+cat > backend/docker-compose.yml << 'EOF'
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: sentinel_db
+    environment:
+      POSTGRES_USER: sentinel
+      POSTGRES_PASSWORD: sentinel_secure_pass
+      POSTGRES_DB: sentinel_threats
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+
+  backend:
+    build: .
+    container_name: sentinel_backend
+    privileged: true
+    network_mode: host
+    environment:
+      - DATABASE_URL=postgresql://sentinel:sentinel_secure_pass@localhost:5432/sentinel_threats
+    depends_on:
+      - postgres
+
+volumes:
+  postgres_data:
+EOF
