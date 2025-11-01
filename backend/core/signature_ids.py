@@ -1,134 +1,46 @@
-# File: core/packet_capture.py
-
-import asyncio
-import threading
-from scapy.all import sniff, IP, TCP, UDP, ICMP
-from datetime import datetime
-from typing import Dict, Optional, Callable
+import re
+import json
+from typing import List, Dict, Optional
+from dataclasses import dataclass
 import logging
 
 logger = logging.getLogger(__name__)
 
-class PacketCapture:
-    """Improved real-time packet capture with proper threading"""
+@dataclass
+class SignatureRule:
+    id: str
+    name: str
+    pattern: str
+    severity: str
+    description: str
+    enabled: bool = True
+
+class SignatureIDS:
+    def __init__(self):
+        self.rules: List[SignatureRule] = []
+        self.load_default_rules()
     
-    def __init__(self, interface: str = "eth0"):
-        self.interface = interface
-        self.is_running = False
-        self.packet_count = 0
-        self.capture_thread = None
-        self.packet_callback = None
-        self.session_id = None
-        
-    def extract_packet_features(self, packet) -> Optional[Dict]:
-        """Extract features from packet"""
-        try:
-            if not packet.haslayer(IP):
-                return None
-            
-            features = {
-                'timestamp': datetime.now().isoformat(),
-                'src_ip': packet[IP].src,
-                'dst_ip': packet[IP].dst,
-                'protocol': packet[IP].proto,
-                'packet_length': len(packet),
-                'ttl': packet[IP].ttl,
-                'flags': 0,
-            }
-            
-            if packet.haslayer(TCP):
-                features.update({
-                    'src_port': packet[TCP].sport,
-                    'dst_port': packet[TCP].dport,
-                    'tcp_flags': int(packet[TCP].flags),
-                    'tcp_window': packet[TCP].window,
-                    'protocol_type': 'TCP',
-                    'flags': int(packet[TCP].flags)
+    def load_default_rules(self):
+        default_rules = [
+            SignatureRule(
+                id="SIG_001",
+                name="Port Scan Detection",
+                pattern=r"dst_port:(22|23|80|443|3389)",
+                severity="medium",
+                description="Potential port scanning activity detected"
+            ),
+        ]
+        self.rules.extend(default_rules)
+    
+    def check_packet(self, packet: Dict) -> List[Dict]:
+        matches = []
+        packet_str = json.dumps(packet)
+        for rule in self.rules:
+            if rule.enabled and re.search(rule.pattern, packet_str, re.IGNORECASE):
+                matches.append({
+                    'rule_id': rule.id,
+                    'rule_name': rule.name,
+                    'severity': rule.severity,
+                    'description': rule.description
                 })
-            elif packet.haslayer(UDP):
-                features.update({
-                    'src_port': packet[UDP].sport,
-                    'dst_port': packet[UDP].dport,
-                    'protocol_type': 'UDP'
-                })
-            elif packet.haslayer(ICMP):
-                features.update({
-                    'icmp_type': packet[ICMP].type,
-                    'icmp_code': packet[ICMP].code,
-                    'protocol_type': 'ICMP'
-                })
-            
-            return features
-            
-        except Exception as e:
-            logger.error(f"Error extracting features: {e}")
-            return None
-    
-    def _packet_handler(self, packet):
-        """Internal packet handler"""
-        if not self.is_running:
-            return
-        
-        features = self.extract_packet_features(packet)
-        if features and self.packet_callback:
-            try:
-                self.packet_callback(features)
-                self.packet_count += 1
-            except Exception as e:
-                logger.error(f"Error in packet callback: {e}")
-    
-    def _capture_loop(self):
-        """Main capture loop running in separate thread"""
-        logger.info(f"Starting packet capture on {self.interface}")
-        try:
-            sniff(
-                iface=self.interface,
-                prn=self._packet_handler,
-                store=False,
-                stop_filter=lambda x: not self.is_running
-            )
-        except Exception as e:
-            logger.error(f"Capture error: {e}")
-        finally:
-            logger.info(f"Capture stopped. Total packets: {self.packet_count}")
-    
-    def start(self, callback: Callable):
-        """Start packet capture in background thread"""
-        if self.is_running:
-            logger.warning("Capture already running")
-            return False
-        
-        self.packet_callback = callback
-        self.is_running = True
-        self.packet_count = 0
-        
-        self.capture_thread = threading.Thread(
-            target=self._capture_loop,
-            daemon=True
-        )
-        self.capture_thread.start()
-        
-        logger.info("Packet capture started")
-        return True
-    
-    def stop(self):
-        """Stop packet capture"""
-        if not self.is_running:
-            logger.warning("Capture not running")
-            return False
-        
-        self.is_running = False
-        
-        if self.capture_thread:
-            self.capture_thread.join(timeout=5)
-        
-        logger.info(f"Capture stopped. Total packets: {self.packet_count}")
-        return True
-    
-    def get_stats(self) -> Dict:
-        """Get capture statistics"""
-        return {
-            'is_running': self.is_running,
-            'packet_count': self.packet_count,
-            'interface': self.interface
-        }
+        return matches
